@@ -1,0 +1,652 @@
+---
+title: "CUBOS"
+---
+
+```{r}
+library(dplyr); library(ggplot2); library(sf); library(ggpubr); library(tidyr)
+# Funcion para categorizar
+categorize <- function(x, n, style = 'jenks', CreateLabs = T){
+  # x <- 1:100; style = 'jenks'; n = 4
+  brks <- classInt::classIntervals(x, n = n, style = style)$brks
+  if(CreateLabs == T){
+    labs <- paste0(brks, '-', brks[-1])
+    labs[length(labs) - 1] <- paste0('>', brks[length(brks) - 1])
+    y <- cut(x, breaks = brks, include.lowest = T, labels = labs[-length(labs)])
+  } else{
+    y <- cut(x, breaks = brks, include.lowest = T)
+  }
+}
+```
+
+
+Los datos de cubos tienen un monton de varables interesantes, entre ellas esta los datos de la campa;a de vacunacion canina.
+
+EN la pagina http://sinba08.salud.gob.mx/cubos/Metadatos/Variables%20SIS%20CEstatal.htm se encuentra una descripcion de variables, dentro de las cuales hay variables sobre el numero de dosis aplicadas (checar anexo 12), Animales capturados (devueltos, sacrificados, y adoptados). Sera que podriamos hacer algun tipo de ajuste para calcular animales de la calle vs domesticos? o que tal algunas estimaciones sobre adopciones vs sacrificios, animales agresores?
+Creo que esto nos da muchisimo material para describir la poblacion de perros en el pais!
+
+Para extraer los datos usados aqui hice:  
+  
+  - ir a la pag http://www.dgis.salud.gob.mx/contenidos/basesdedatos/bdc_serviciossis_gobmx.html
+  - desde el link en el navegador safari, da la opcion de seleccionar el anio, despues copie el link y lo pegue en el navegador internet explorer.  
+  - desde internet explorer no encontre la opcion para seleccionar el anio.  
+  - en internet
+  
+CGC03 Perros Censados
+
+What can we do with CUBOS?:
+  
+  - Report number of vaccinated dogs and cats per year.  
+  - Number of aggression.  
+  - Stray dogs per total dogs.  
+  - Newborns proportions.  
+  - Rabies positive.  
+  - Male female ratios?  
+  - Esterilizaciones.  
+  
+# Cargar los datos
+
+```{r}
+# Encuesta14 %>% 
+#   group_by(i = '1') %>% 
+#   summarise_at(.vars = c('Total de adultos encuestados', 'Adultos con perro', 'Adultos con gato'), .funs = sum)
+```
+
+Primero cargare los de un ano, para ver las variables que queremos.
+
+```{r}
+r16 <- read.csv("../Datos/Cubos/Rabia/Rabia16.csv", skip = 1, encoding = "UTF-8") 
+# colnames(r16)
+```
+
+```{r}
+# Seleccionar las variables de perros
+pi <- stringr::str_detect(colnames(r16), pattern = 'PERRO')
+VarPerros <- c(colnames(r16)[pi], 'RAE03.CENTRO.DE.ATENCIÓN.CANINA', 'RAE04.AUTORIDAD.LOCAL')
+# Seleccionar variables de gatos 
+gi <- stringr::str_detect(colnames(r16), pattern = 'GATO')
+VarGatos <- colnames(r16)[gi]
+
+x <- 16
+r16 <- r16 %>%
+    mutate(year = gsub('([^0-9])', '', x),
+           Entidad = gsub('([0-9 ])', '', Entidad) %>% # Format the special characters for the names of entidades
+             stringi::stri_trans_general(., "Latin-ASCII")) %>%
+    mutate_at(colnames(.)[-1], .funs = ~as.numeric(gsub('([^0-9])', '', .))) %>% # remove the commas ','
+  mutate(TotalPerros = rowSums(.[,VarPerros[-c(16:21)]], na.rm = T),
+         TotalGatos = rowSums(.[,VarGatos[-c(16:19)]], na.rm = T),
+         Entidad = gsub("QUERETAROARTEAGA", "QUERETARO", Entidad) %>%
+           gsub("DISTRITOFEDERAL", "CIUDADDEMEXICO", .))
+
+sum(r16$TotalPerros)
+```
+ 
+Ahora cargamos todos los anos de rabia
+```{r}
+p <- "../Datos/Cubos/Rabia/"
+f <- list.files(p)
+
+rabia <- lapply(f, function(x){
+  read.csv(paste0(p, x), skip = 1, encoding = "UTF-8", nrows = 44) %>% 
+    select(1:44) %>% 
+    mutate(year = paste0(20, gsub('([^0-9])', '', x)),
+           Entidad = gsub('([0-9 ])', '', Entidad) %>%
+             stringi::stri_trans_general(., "Latin-ASCII")) %>%
+    mutate_at(colnames(.)[-1], .funs = ~as.numeric(gsub('([^0-9])', '', .))) %>% # remove the commas ','
+    mutate(TotalPerros = rowSums(.[,VarPerros[-c(16:19)]], na.rm = T),
+           TotalGatos = rowSums(.[,VarGatos[-c(16:19)]], na.rm = T),
+           Entidad = gsub("QUERETAROARTEAGA", "QUERETARO", Entidad) %>%
+             gsub("DISTRITOFEDERAL", "CIUDADDEMEXICO", .))
+    }
+  ) %>%
+  do.call(rbind, .) %>% 
+  filter(Entidad != 'GrandTotal')
+
+# Sum births dogs and cats (< 1 year)
+# get variable names:
+V.me1a <- colnames(rabia)[stringr::str_detect(colnames(rabia), pattern = 'MENOR.DE')] # all < 1 year
+v.pm1a <- V.me1a[stringr::str_detect(V.me1a, pattern = 'PERRO')] # only dogs
+v.gm1a <- V.me1a[stringr::str_detect(V.me1a, pattern = 'GATO')] # only cats
+
+# Get variables for centro canino (stray dogs?)
+V.sd <- colnames(rabia)[stringr::str_detect(colnames(rabia), pattern = 'RAE')]
+
+# Variables para Campa;a de vacunacion
+V.RAV <- colnames(rabia)[stringr::str_detect(colnames(rabia), pattern = 'RAV')] # RAV
+V.RAVd <- V.RAV[stringr::str_detect(V.RAV, pattern = 'PERRO')] # only dogs
+V.RAVg <- V.RAV[stringr::str_detect(V.RAV, pattern = 'GATO')] # only cats
+
+# Variables males
+V.M <- colnames(rabia)[stringr::str_detect(colnames(rabia), pattern = 'MACHO')] # RAV
+V.Md <- V.M[stringr::str_detect(V.M, pattern = 'PERRO')] # only dogs
+V.Mc <- V.M[stringr::str_detect(V.M, pattern = 'GATO')] # only cats
+
+V.F <- colnames(rabia)[stringr::str_detect(colnames(rabia), pattern = 'HEMBRA')] # RAV
+V.Fd <- V.F[stringr::str_detect(V.F, pattern = 'PERRO')] # only dogs
+V.Fc <- V.F[stringr::str_detect(V.F, pattern = 'GATO')] # only dogs
+
+# Variables para Campa;a de esterilizaciones
+V.RAM <- colnames(rabia)[stringr::str_detect(colnames(rabia), pattern = 'RAM')] # RAV
+V.RAMd <- V.RAM[stringr::str_detect(V.RAM, pattern = 'PERRO')] # only dogs
+V.RAMg <- V.RAM[stringr::str_detect(V.RAM, pattern = 'GATO')] # only dogs
+
+# sum the variables across rows:
+rabia <- rabia %>% 
+  mutate(pm1a = rowSums(.[v.pm1a], na.rm = T),
+         gm1a = rowSums(.[v.gm1a], na.rm = T),
+         strayDogs = rowSums(.[V.sd], na.rm = T),
+         RAVd = rowSums(.[V.RAVd], na.rm = T),
+         RAVg = rowSums(.[V.RAVg], na.rm = T),
+         RAMd = rowSums(.[V.RAMd], na.rm = T),
+         RAMg = rowSums(.[V.RAMg], na.rm = T),
+         Md = rowSums(.[V.Md], na.rm = T),
+         Mc = rowSums(.[V.Mc], na.rm = T),
+         Fd = rowSums(.[V.Fd], na.rm = T),
+         Fc = rowSums(.[V.Fc], na.rm = T))
+```
+
+
+
+```{r}
+RabiaSum <- rabia %>% 
+  group_by(year) %>% 
+  summarise_at(.vars = c('TotalPerros'), .funs = median)
+
+rabia %>%
+  ggplot() +
+  # geom_point(aes(x = year, y = TotalPerros/1e3, group = Entidad, alpha = 0.3)) +
+  geom_line(aes(x = year, y = TotalPerros/1e3, group = Entidad, alpha = 0.1)) +
+  geom_line(data = RabiaSum, aes(x= year, y=TotalPerros/1e3), col = 'red3', lwd = 1.5, alpha = 0.8) +
+  theme_light() +
+  theme(legend.position = 'none') 
+
+rabia %>%
+  ggplot(aes(x = year, y = pm1a/TotalPerros, col = Entidad)) +
+  geom_point() +
+  geom_line() +
+  theme(legend.position = 'none') 
+
+rabia %>%
+  ggplot(aes(x = year, y = gm1a/TotalGatos, col = Entidad)) +
+  geom_point() +
+  geom_line()+
+  theme(legend.position = 'none') 
+
+rabia %>%
+  ggplot(aes(x = year, y = strayDogs/TotalPerros, col = Entidad)) +
+  geom_point() +
+  geom_line() +
+  theme(legend.position = 'none') 
+```
+
+```{r T1 totales por ano}
+# Totales por ano
+T1 <- rabia %>% 
+  group_by(year) %>% 
+  summarise_at(.vars = c('TotalPerros', 'TotalGatos', 'RAVd', 'RAMd', 'RAVg', 'RAMg', 'Md', 'Fd', 'Mc', 'Fc', 'pm1a', 'gm1a', 'strayDogs'), .funs = ~sum(., na.rm = T)) %>% 
+  mutate(pMd = Md/Fd, pMc = Mc/Fc, pm1a = pm1a/RAMd, gm1a = gm1a/RAMg, pControl = strayDogs/TotalPerros) %>%
+  # mutate(pMd = Md/Fd, pMc = Mc/Fc, pm1a = pm1a/TotalPerros, gm1a = gm1a/TotalGatos) %>% 
+  select(year, TotalPerros, TotalGatos, pm1a, gm1a, pMd, pMc, pControl)
+
+
+T1 %>% 
+  gather(., Variable, N, -year) %>% 
+  ggplot() +
+  geom_line(aes(x = year, y = N, col = Variable))
+
+## Exportar totales por año
+T1 %>% 
+  round(4) %>% 
+  gather(., Variable, N, -year) %>% 
+  spread(., year, N) 
+
+
+T1 %>% 
+  write.csv('DatosRabia/T1.csv', row.names = F)
+```
+
+
+# Population
+
+Use the constant share to estimate the number of dogs 
+
+```{r Datos CONAPO}
+# Nombres de las entidades
+Ent <- rabia %>% 
+  distinct(Entidad)
+
+# Extraer el anio 2022 de CONAPO
+CP <- rbind(read.csv("../Datos/CONAPO Proyecciones/base_municipios_final_datos_01.csv"),
+            read.csv("../Datos/CONAPO Proyecciones/base_municipios_final_datos_02.csv"))
+
+# Rango de edades a remover (No adultos)
+rangoEdad <- c("pobm_00_04", "pobm_05_09", "pobm_10_14", "pobm_15_19")
+
+# Formato de los datos
+CPsub <- CP %>%
+  mutate(NOM_ENT = stringi::stri_trans_general(NOM_ENT, "Latin-ASCII") %>% 
+           ifelse(stringr::str_detect(string = ., pattern = "Oaxaca"), "OAXACA", .)) %>%
+  filter(!(EDAD_QUIN %in% rangoEdad)) %>% # Remover los no adultos
+  group_by(NOM_ENT, A.O) %>% 
+  summarise(POB = sum(POB)) %>% 
+  filter(A.O %in% 2016:2020) %>% 
+  data.frame()
+
+# Make the order match wit the rabies names
+ord <- c(1:4, 7, 8, 9, 5, 6, 10:32)
+
+CPk <- CPsub %>% 
+  distinct(NOM_ENT) %>% 
+  mutate(Entidad = Ent[ord,])
+
+rabia <- rabia %>% 
+  left_join(CPk) %>% 
+  left_join(CPsub, by = c('NOM_ENT', 'year' = 'A.O'))
+
+rabia <- rabia %>% 
+  rename(Agresiones = X053.ZOONOSIS.RABIA.PERSONAS.AGREDIDAS)
+```
+
+
+# Spatial 
+
+Cargar los datos espaciales
+
+```{r}
+library(sf)
+MxSp <- raster::getData("GADM", country = "MEX", level = 1) %>%
+  st_as_sf() %>%
+  select(NAME_1) %>%
+  rmapshaper::ms_simplify(., keep = 0.001)
+
+# Make the order match wit the rabies names
+ord <- c(1:4, 7,8,5, 6,9:32)
+# add the rabies names in order
+MxSp <- MxSp %>% 
+  # data.frame() %>% 
+  # select(NAME_1) %>% 
+  mutate(Entidad = Ent[ord,])
+
+RabiaSp <- MxSp %>% 
+  right_join(rabia, by = 'Entidad')
+
+RabiaSp %>% 
+  mutate(PersonasAgredidas = Agresiones/POB) %>% 
+  ggplot() +
+  geom_sf(aes(fill = PersonasAgredidas)) +
+  theme(axis.ticks = element_blank(), axis.text = element_blank()) +
+  facet_wrap(~year) 
+```
+
+## BIARE datos
+
+```{r Datos BIARE}
+Encuesta14 <- readxl::read_xlsx("../Datos/Datos pC INEGI.xlsx", range = "B4:H36")
+# Set the same order as spatial Object
+ord <- c(1:4, 7, 6, 8, 9, 5, 10, 13, 12, 14, 15, 11, 16:23, 25, 24, 26:32)
+
+EncuestaSp <- MxSp %>% 
+  # data.frame() %>% 
+  # select(NAME_1) %>% 
+  mutate(ENT = Encuesta14$ENTIDAD[ord], Encuestados = Encuesta14$`Total de adultos encuestados`[ord],
+         Perros = Encuesta14$`Adultos con perro`[ord],
+         Gatos = Encuesta14$`Adultos con gato`[ord])
+
+E14p <- EncuestaSp %>% 
+  mutate(Perrosc = categorize(round(Perros/10e3), n = 6)) %>% 
+  ggplot() +
+  geom_sf(aes(fill = Perrosc), lwd = 0.1, col = 'black') +
+  theme_light() +
+  # scale_fill_gradient(low = 'black', high = 'red') +
+  scale_fill_manual(values = grDevices::colorRampPalette(colors = c('white', 'black'))(6)) +
+  theme(axis.ticks = element_blank(), axis.text = element_blank(),
+        legend.position = 'top', legend.text = element_text(size = 10), legend.key.size = unit(0.1, 'in')) +
+  guides(fill = guide_legend(title.position = 'top')) +
+  labs(fill = "Dogs x 10,000")
+
+E14g <- EncuestaSp %>% 
+  mutate(Gatosc = categorize(round(Gatos/10e3), n = 6)) %>% 
+  ggplot() +
+  geom_sf(aes(fill = Gatosc), lwd = 0.1, col = 'black') +
+  # scale_fill_gradient(low = 'black', high = 'purple') +
+  scale_fill_manual(values = grDevices::colorRampPalette(colors = c('white', 'black'))(6)) +
+  theme_light() +
+  theme(axis.ticks = element_blank(), 
+        axis.text = element_blank(),
+        legend.position = 'top', legend.text = element_text(size = 10), legend.key.size = unit(0.1, 'in')) +
+  guides(fill = guide_legend(title.position = 'top')) +
+  labs(fill = "Cats X 10,000")
+
+
+ggarrange(E14p, E14g) %>% 
+  annotate_figure(top = text_grob('Population according to 2014 survey', face = "bold", size = 15)) 
+# %>% 
+#   ggsave(filename = '../Documentation/Figures/PopDistributionE14.png', height = 3, width = 7)
+```
+
+
+
+
+## Calculating SIR for agressions
+
+```{r}
+# SIR for all years
+rabia_sum <- rabia %>% 
+  group_by(i = 1) %>% 
+  summarise_at(.vars = c('POB', 'Agresiones'), .funs = ~sum(., na.rm = T)) %>% 
+  mutate_at(.vars = c('Agresiones'), .funs = ~./POB)
+
+SIRdf <- RabiaSp %>% 
+  mutate(E_agresiones = POB*rabia_sum$Agresiones,
+         SIR_agresiones = Agresiones/E_agresiones)
+
+# Exportar como tabla
+SIRdf %>% 
+  data.frame() %>% 
+  arrange(SIR_agresiones) %>% select(Entidad, year, SIR_agresiones) %>% 
+  write.csv('../Documentation/Tablas/SIR.csv', row.names = F)
+
+SIRAp <-  SIRdf %>% 
+  ggplot() +
+  geom_sf(aes(fill = SIR_agresiones), col = 'black', lwd = 0.1) +
+  scale_fill_gradient2(low = 'blue', mid = 'white', high = 'red', midpoint = 1) +
+  theme_light() +
+  theme(axis.ticks = element_blank(), axis.text = element_blank(),
+        legend.position = 'top') +
+  facet_wrap(~year) +
+  labs(title = 'Standardized incidence ratio for Dog agressions', fill = 'SIR for agressions') 
+
+SIRAp %>% 
+  ggsave(filename = '../Documentation/Figures/SIR_Agressions.png', width = 6, height = 4)
+```
+
+## Total Perros y gatos
+
+```{r}
+Rp <- RabiaSp %>% 
+  mutate(Perrosc = categorize(round(RAVd/1e3), n = 6)) %>% 
+  ggplot() +
+  geom_sf(aes(fill = Perrosc), col = 'black', lwd = 0.1) +
+  facet_wrap(~year) +
+  theme_light() +
+  scale_fill_manual(values = grDevices::colorRampPalette(colors = c('white', 'black'))(6)) +
+  theme(axis.ticks = element_blank(), axis.text = element_blank(),
+        legend.position = 'top', legend.text = element_text(size = 10), legend.key.size = unit(0.1, 'in')) +
+  guides(fill = guide_legend(title.position = 'top')) +
+  labs(fill = "Dogs per 1000 people")
+
+Rg <- RabiaSp %>% 
+  mutate(Gatosc = categorize(round(RAVg/1e3), n = 6)) %>% 
+  ggplot() +
+  geom_sf(aes(fill = Gatosc), col = 'black', lwd = 0.1) +
+  facet_wrap(~year) +
+  theme_light() +
+  scale_fill_manual(values = grDevices::colorRampPalette(colors = c('white', 'black'))(6)) +
+  theme(axis.ticks = element_blank(), axis.text = element_blank(),
+        legend.position = 'top', legend.text = element_text(size = 10), legend.key.size = unit(0.1, 'in')) +
+  guides(fill = guide_legend(title.position = 'top')) +
+  labs(fill = "Cats per 1000 people")
+
+ggarrange(Rp, Rg) %>% 
+  annotate_figure(top = text_grob('Population according to Rabies vaccination program', face = "bold", size = 15)) %>% 
+  ggsave(filename = '../Documentation/Figures/RabiesPop.png', width = 8, height = 4)
+```
+
+Top places 
+```{r}
+RabiaSp %>% 
+  data.frame() %>% 
+  arrange(desc(RAVd)) %>% 
+  select(Entidad, RAVd, RAVg, year)
+```
+
+### Comparando las poblaciones de BIARE con Rabia
+
+```{r}
+BIAREp <- EncuestaSp %>% 
+  data.frame() %>% 
+  mutate_at(vars('Perros', 'Gatos'), .funs = ~./Encuestados) %>% #Obtener proporcion de personas con perro/gato
+  select(Entidad, Perros, Gatos)
+
+RabiaSp <- RabiaSp %>% 
+  left_join(BIAREp) %>% 
+  mutate(ProyeccionPerros = Perros*POB,
+         ProyeccionGatos = Gatos*POB)
+```
+
+
+```{r Obtener la poblacion max para Rabia}
+# RabiaMaxP <- RabiaSp %>% 
+#   data.frame() %>% 
+#   group_by(Entidad) %>% 
+#   summarise(TotalPerros = max(RAVd), TotalGatos = max(RAVg))
+# 
+# EncuestaSp %>% 
+#   data.frame() %>% 
+#   select(Entidad, Perros, Gatos) %>% 
+#   left_join(RabiaMaxP) %>% 
+#   rename(BiarePerros = Perros, BiareGatos = Gatos, RabiaPerros = TotalPerros, RabiaGatos = TotalGatos) %>% 
+#   mutate(RabiaPerrosp = round(RabiaPerros/BiarePerros, 2), RabiaGatosp = round(RabiaGatos/BiareGatos, 2)) %>% 
+#   mutate(Entidad = recode(Entidad, 'MEXICO' = 'Estado De Mexico')) %>% 
+#   # slice(ord)
+#   arrange(Entidad) %>% 
+#   # arrange(desc(RabiaPerrosp)) %>%
+#   write.csv(., '../Documentation/Tablas/BIARE_Rabia_sum.csv', row.names = F)
+```
+
+
+## Perros y gatos por persona
+
+```{r fig.height=3, fig.width=7}
+Rp <- RabiaSp %>% 
+  mutate(Perrosc = categorize(round(TotalPerros/POB * 100, 2), n = 6)) %>% 
+  ggplot() +
+  geom_sf(aes(fill = Perrosc), col = 'black', lwd = 0.1) +
+  facet_wrap(~year) +
+  theme_light() +
+  scale_fill_manual(values = grDevices::colorRampPalette(colors = c('black', 'red'))(6)) +
+  theme(axis.ticks = element_blank(), axis.text = element_blank(),
+        legend.position = 'top', legend.text = element_text(size = 5), legend.key.size = unit(0.1, 'in')) +
+  guides(fill = guide_legend(title.position = 'top')) +
+  labs(fill = "Dogs per 100 people")
+
+Rg <- RabiaSp %>% 
+  mutate(Gatosc = categorize(round(TotalGatos/POB * 100, 2), n = 6)) %>% 
+  ggplot() +
+  geom_sf(aes(fill = Gatosc), col = 'black', lwd = 0.1) +
+  facet_wrap(~year) +
+  theme_light() +
+  scale_fill_manual(values = grDevices::colorRampPalette(colors = c('black', 'purple'))(6)) +
+  theme(axis.ticks = element_blank(), axis.text = element_blank(),
+        legend.position = 'top', legend.text = element_text(size = 5), legend.key.size = unit(0.1, 'in')) +
+  guides(fill = guide_legend(title.position = 'top')) +
+  labs(fill = "Cats per 100 people")
+
+ggarrange(Rp, Rg) %>% 
+  annotate_figure(top = text_grob('Population according to Rabies  vaccination program', face = "bold", size = 15)) %>% 
+  ggsave(filename = '../Documentation/Figures/PopDistributionR.png', height = 3.5, width = 7)
+```
+
+# Males vs females
+
+```{r}
+RabiaSp %>% data.frame() %>% 
+  group_by(year) %>% 
+  summarise_at(.vars = c('Md', 'Fd', 'Mc', 'Fc'), .funs = sum) %>% 
+  mutate(MFDogRatio = Md/Fd, MFCatRatio = Mc/Fc) %>% 
+  select(year, MFDogRatio, MFCatRatio)
+
+RabiaSp %>% data.frame() %>% 
+  mutate(Ratio = Mc/Fc) %>% 
+  select(Entidad, year, Ratio) %>% 
+  arrange(desc(Ratio))
+
+MFdp <- RabiaSp %>% 
+  ggplot() +
+  geom_sf(aes(fill = Md/Fd), lwd = 0.1, col = 'black') +
+  facet_wrap(~year) +
+  theme_light() +
+  scale_fill_gradient(low = 'white', high = 'black') +
+  # scale_fill_gradient2(low = 'white', mid = 'black', high = '#329443FA', midpoint = 1) +
+  theme(axis.ticks = element_blank(), axis.text = element_blank(),
+        legend.position = 'top', legend.text = element_text(size = 5), legend.key.size = unit(0.2, 'in')) +
+  guides(fill = guide_legend(title.position = 'top')) +
+  labs(fill = "Dogs")
+
+MFcp <- RabiaSp %>% 
+  ggplot() +
+  geom_sf(aes(fill = Mc/Fc), lwd = 0.1, col = 'black') +
+  facet_wrap(~year) +
+  theme_light() +
+  scale_fill_gradient(low = 'white', high = 'black') +
+  # scale_fill_gradient2(low = 'pink', mid = 'grey10', high = '#329443FA', midpoint = 1) +
+  theme(axis.ticks = element_blank(), axis.text = element_blank(),
+        legend.position = 'top', legend.text = element_text(size = 5), legend.key.size = unit(0.2, 'in')) +
+  guides(fill = guide_legend(title.position = 'top')) +
+  labs(fill = "Cats")
+
+ggarrange(MFdp, MFcp) %>% 
+  annotate_figure(top = text_grob('Male:Female ratio', face = "bold", size = 15)) %>% 
+  ggsave(filename = '../Documentation/Figures/MFR.png', height = 4, width = 8)
+```
+
+```{r}
+RabiaSp %>% 
+  data.frame() %>% 
+  mutate(MFRd = Md/Fd,
+         MFRc = Mc/Fc) %>% 
+  select(Entidad, Md, Fd, MFRd, Mc, Fc, MFRc) %>% 
+  arrange(desc(MFRc))
+```
+
+
+## Nacidos 
+
+```{r}
+# Overal
+RabiaSp %>% 
+  data.frame() %>% 
+  group_by(year) %>% 
+  summarise_at(.vars = c('TotalPerros', 'TotalGatos', 'pm1a', 'gm1a'), .funs = sum) %>% 
+  mutate(pm1ab = pm1a/TotalPerros, gm1ab = gm1a/TotalGatos)
+
+Bp <- RabiaSp %>% 
+  mutate(pm1ab = round(pm1a/TotalPerros, 4),
+         pm1ac = categorize(x = pm1ab, n = 5)) %>%
+  # data.frame() %>% arrange(pm1ab) %>% 
+  # select(Entidad, pm1a, pm1ab, pm1ac)
+  ggplot() +
+  geom_sf(aes(fill = pm1ab), col = 'black', lwd = 0.1) +
+  theme_light() +
+  theme(axis.ticks = element_blank(), axis.text = element_blank(),
+        legend.position = 'top',
+        legend.text = element_text(size = 7), legend.key.size = unit(0.1, 'in')) +
+  facet_wrap(~year) +
+  guides(fill = guide_legend(title.position = 'top')) +
+  labs(fill = 'Dogs') +
+  scale_fill_manual(values = grDevices::colorRampPalette(colors = c('white', 'black'))(6))
+
+Bg <- RabiaSp %>% 
+  mutate(gm1ab = round(gm1a/TotalGatos, 4),
+         gm1ac = categorize(x = gm1ab, n = 5)) %>%
+  data.frame() %>% arrange(gm1ab) %>% 
+  select(Entidad, gm1a, gm1ab, gm1ac)
+  mutate(gm1ab = categorize(x = round(gm1a/TotalGatos, 2), n = 5)) %>%
+  ggplot() +
+  geom_sf(aes(fill = gm1ab), col = 'black', lwd = 0.1) +
+  facet_wrap(~year) +
+  theme_light() +
+  theme(axis.ticks = element_blank(), axis.text = element_blank(),
+        legend.position = 'top',
+        legend.text = element_text(size = 7), legend.key.size = unit(0.1, 'in')) +
+  guides(fill = guide_legend(title.position = 'top')) +
+  labs(fill = 'Cats') +
+  scale_fill_manual(values = grDevices::colorRampPalette(colors = c('white', 'black'))(6))
+
+ggarrange(Bp, Bg) %>% 
+  annotate_figure(top = text_grob('Proportion of births on given year', face = "bold", size = 15)) %>% 
+  ggsave(filename = '../Documentation/Figures/Births.png', height = 4, width = 8)
+```
+
+```{r}
+rabia %>% 
+  mutate(pm1ap = pm1a/TotalPerros,
+         gm1ap = gm1a/TotalGatos) %>% 
+  select(Entidad, pm1ap, gm1ap) %>% 
+  arrange(desc(gm1ap))
+```
+
+
+## Perros callejeros
+
+```{r}
+ACCp <- RabiaSp %>% 
+  mutate(strayDogsb = round(strayDogs/TotalPerros, 3),
+         strayDogsc = categorize(strayDogsb, 6)) %>% 
+  data.frame() %>% arrange(strayDogsb) %>% select(Entidad, strayDogs, strayDogsb)
+  ggplot() +
+  geom_sf(aes(fill = strayDogsb), col = 'black', lwd = 0.1) +
+  theme_light() +
+  theme(axis.ticks = element_blank(), axis.text = element_blank(),
+        legend.position = 'top',
+        legend.text = element_text(size = 10), legend.key.size = unit(0.1, 'in')) +
+  facet_wrap(~year) +
+  scale_fill_manual(values = grDevices::colorRampPalette(colors = c('white', 'black'))(6)) +
+  labs(fill = '', title = 'Proportion of dogs at animal control centers') 
+
+ACCp %>% 
+  ggsave(filename = '../Documentation/Figures/AnimalControl.png', height = 4, width = 8)
+```
+
+
+## Impact of COVID-19 in the program
+
+```{r}
+VacSum <- rabia %>% 
+  filter(year != 2020) %>% 
+  mutate(Vacunados = TotalPerros + TotalGatos) %>% 
+  group_by(Entidad) %>% 
+  summarise_at(.vars = c('Vacunados'), .funs = mean)
+
+VacSum <- rabia %>% 
+  filter(year == 2020) %>% 
+  mutate(Vacunados20 = TotalPerros + TotalGatos) %>% 
+  select(Entidad, Vacunados20) %>% 
+  left_join(VacSum) %>% 
+  mutate(dVac = (Vacunados20/Vacunados) - 1)
+
+V2020pd <- MxSp %>% 
+  left_join(VacSum) %>% 
+  data.frame() %>% arrange(dVac)
+  ggplot() +
+  geom_sf(aes(fill = dVac*100)) +
+  theme_light() +
+  scale_fill_gradient2(low = 'red', mid = 'white', high = 'blue', midpoint = 0) +
+  labs(fill = '', title = 'Proportionate change in Vaccinated animals') +
+  theme(legend.position = 'top',
+        axis.ticks = element_blank(),
+        axis.text = element_blank())
+
+V2020pd %>% 
+  ggsave(filename = '../Documentation/Figures/V2020d.png')
+```
+
+
+```{r T2}
+rabia_sum <- rabia %>% 
+  group_by(i = 1) %>% 
+  summarise_at(.vars = c('POB', 'Agresiones'), .funs = ~sum(., na.rm = T)) %>% 
+  mutate_at(.vars = c('Agresiones'), .funs = ~./POB)
+
+rabia %>% 
+  left_join(BIAREp) %>% 
+  mutate(E_agresiones = POB*rabia_sum$Agresiones,
+         SIR_agresiones = Agresiones/E_agresiones,
+         ProyeccionPerros = POB*Perros,
+         ProyeccionGatos = POB*Gatos) %>% 
+  mutate(pm1a = pm1a/RAMd, gm1a = gm1a/RAMg, MFd = Md/Fd, MFc = Mc/Fc, pControl = strayDogs/TotalPerros) %>%
+  # mutate(pm1a = pm1a/TotalPerros, gm1a = gm1a/TotalGatos, MFd = Md/Fd, MFc = Mc/Fc) %>% 
+  mutate_at(c('pm1a', 'gm1a', 'ProyeccionPerros', 'ProyeccionGatos', 'MFd', 'MFc', 'pControl', 'SIR_agresiones'), ~round(., 4)) %>% 
+  select(year, NOM_ENT, POB, TotalPerros, TotalGatos, RAVd, RAVg, ProyeccionPerros, ProyeccionGatos, pm1a, gm1a, MFd, MFc, pControl, SIR_agresiones) %>% 
+  write.csv('DatosRabia/T2.csv', row.names = F)
+```
+

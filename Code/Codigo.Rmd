@@ -1,0 +1,330 @@
+---
+title: "Population extrapolation"
+output:
+  html_document:
+    df_print: paged
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r warning = F, message = F}
+knitr::opts_chunk$set(warning = F, message = F)
+library(dplyr); library(ggplot2); library(sf); library(sp)
+```
+
+
+Cargar los datos:
+
+```{r}
+Encuesta14 <- readxl::read_xlsx("../Datos/Datos pC INEGI.xlsx", range = "B4:H36")
+Adultos <- readxl::read_xlsx("../Datos/Datos pC INEGI.xlsx", range = "J4:P36")
+POB <- readxl::read_xlsx("../Datos/Datos pC INEGI.xlsx", range = "R4:W36") %>%
+  mutate(Entidad = Encuesta14$ENTIDAD) %>%
+  tidyr::gather(year, pob, `2015`:`2020`) %>%
+  mutate(year = as.numeric(year))
+
+### Poblacion estimada (porcentaje de adultos con perro * Adultos ano x)
+Perros <- readxl::read_xlsx("../Datos/Datos pC INEGI.xlsx", range = "Y4:AE36")
+Gatos <- readxl::read_xlsx("../Datos/Datos pC INEGI.xlsx", range = "AG4:AM36")
+
+sum(Encuesta14$`Adultos con perro`)
+sum(Encuesta14$`Adultos con gato`)
+```
+
+# Simple extrapolation
+
+## Example from book
+
+```{r Data from example}
+# Data from example
+# List for the Island Population
+Island_d <- list(P1 = 74200, # base year
+         Pb = 19638, # launch year
+         y = 40) # difference between base and launch
+
+# List for the Walla Walla population
+ww_d <- list(P1 = 54200, # base year
+         Pb = 42195, # launch year
+         y = 40) # difference between base and launch
+```
+
+
+### Linear change 
+
+$$\Delta = (P_1-Pb)/(y)$$
+```{r functions for Linear change}
+# Linear change function
+LinearCh <- function(d, z){
+  # P1 Population in the launch year
+  # Pb population in the base year
+  # y number of years in the base period (years between base and launch year)
+  delta <- (d$P1 - d$Pb)/d$y
+  # Compute projection:
+  # P1 pop at launch year
+  # z number of years in projection Horizaon
+  Pt <- d$P1 + (z)*(delta)
+  return(Pt)
+}
+
+# Example
+# Island county change between 1960 and 2000
+LinearCh(Island_d, z = 10)
+
+# Walla Walla county change between 1960 and 2000
+LinearCh(ww_d, 10)
+```
+
+
+
+### Geometric change
+
+$$
+r=[(P_1/P_b)^{1/y)}] - 1 \\
+P_t = (P_1)(1+r)^2
+$$
+
+```{r Function for geometric change}
+GeometricCh <- function(d, z){
+  # r <- round(((d$P1/d$Pb)^(1/d$y)) - 1, 4) # rounding to 4 decimals
+  r <- ((d$P1/d$Pb)^(1/d$y)) - 1
+  Pt <- (d$P1)*(1 + r)^z
+  return(Pt)
+}
+
+# Example
+# Island county
+GeometricCh(Island_d, # Population data
+         z = 10) # projection to future
+
+# Walla Walla county
+GeometricCh(ww_d, # Population data
+         z = 10) # projection to future
+```
+
+### Exponential change
+
+$$
+r = [\ln(P_1/P_b)]/(y) \\
+P_t = (P_1)(e^{rz})
+$$
+```{r Function for exponential change}
+ExpCh <- function(d, z){
+  # r <- round((log(d$P1/d$Pb)/(d$y)), 4) # rounding to 4 decimals
+  r <- (log(d$P1/d$Pb)/(d$y))
+  Pt <- (d$P1)*(exp(r*z))
+  return(Pt)
+}
+
+# Example
+# Island county
+ExpCh(Island_d, # difference between base and launch
+         z = 10) # projection to future
+
+# Walla Walla county
+ExpCh(ww_d, # difference between base and launch
+         z = 10) # projection to future
+```
+
+### Using the 3 approaches
+
+```{r Function to use the 3}
+SimpleTrend <- function(x, z){
+  Linear <- LinearCh(x, z ) # Linear
+  Exp <- ExpCh(x, z) # Exponential
+  Geo <- GeometricCh(x, z) # Geometric
+  return(data.frame(Linear, Exp, Geo))
+}
+
+SimpleTrend(ww_d, z = 10)
+```
+
+
+### Create the first part of the book's table
+
+```{r}
+years <- c(5, 10, 15)
+# For the island
+lapply(years, SimpleTrend, x = Island_d) %>% 
+  do.call(rbind,.) %>% 
+  mutate(year = years)
+# For the ww county
+lapply(years, SimpleTrend, x = ww_d) %>% 
+  do.call(rbind,.) %>% 
+  mutate(year = years)
+```
+
+
+## Use it for the dog data
+
+```{r}
+# Using data from 1990 and 1999
+dp_1 <- list(P1 = 13e6, # base year
+         Pb = 7e6, # launch year
+         y = 9) # difference between base and launch
+
+SimpleTrend(dp_1, z = 2014 - 1999)
+
+# Use 1990 and 2014
+dp_2 <- list(P1 = 39717173,
+             Pb = 7000000,
+             y = (2014 - 1990))
+
+SimpleTrend(dp_2, 2022 - 2014)
+
+# Use 1999 and 2014
+dp_3 <- list(P1 = 39717173,
+             Pb = 13000000,
+             y = (2014 - 1999))
+
+SimpleTrend(dp_3, 2022 - 2014)
+```
+
+
+# Constant share model
+
+```{r Extraer el anio 2022 de CONAPO}
+# Extraer el anio 2022 de CONAPO
+CP <- rbind(read.csv("../Datos/CONAPO Proyecciones/base_municipios_final_datos_01.csv", encoding = 'UTF-8'),
+            read.csv("../Datos/CONAPO Proyecciones/base_municipios_final_datos_02.csv", encoding = 'UTF-8'))
+
+# Rango de edades a remover (No adultos)
+rangoEdad <- c("pobm_00_04", "pobm_05_09", "pobm_10_14", "pobm_15_19")
+
+CP22 <- CP %>%
+  mutate(NOM_ENT = stringi::stri_trans_general(NOM_ENT, "Latin-ASCII")) %>%
+  filter(!(EDAD_QUIN %in% rangoEdad)) %>% # Remover los no adultos
+  group_by(NOM_ENT, A.O) %>% 
+  summarise(POB = sum(POB)) %>% 
+  filter(A.O == 2022) %>% 
+  data.frame()
+```
+
+```{r Reordenar de acuerdo a encuesta 14}
+# Reordenar de acuerdo a encuesta 14
+# Encuesta14$ENTIDAD
+ord <- c(1:4, 7, 6, 5, 8:10, 13, 12, 14, 15, 11, 16:20, rep(20, 7), 21:23, 25, 24, 26:32)
+
+CP22 <- CP22 %>% 
+  mutate(Entidad = Encuesta14$ENTIDAD[ord]) %>% 
+  group_by(Entidad, A.O) %>% 
+  summarise(POB = sum(POB)) %>% 
+  data.frame()
+```
+
+$$\hat{p} \pm Z_{\alpha/2}\sqrt{\hat{p}(1 - \hat{p})}$$
+
+```{r get expected pop}
+# Funcion para los CI de la proporcion
+CIs <- function(p, n){
+  LB <- p - 1.96 * sqrt( (p*(1-p))/n)
+  UB <- p + 1.96 * sqrt( (p*(1-p))/n)
+  data.frame(LB, UB)
+}
+
+# get expected pop and proportion CIs
+EPop <- cbind(CP22, Encuesta14) %>% 
+  mutate(pPerro = `Adultos con perro`/`Total de adultos encuestados`,
+         LB_Perros = CIs(pPerro, `Total de adultos encuestados`)[,'LB'],
+         UB_Perros = CIs(pPerro, `Total de adultos encuestados`)[,'UB'],
+         `Proportion of adults with dogs` = paste0(round(pPerro, 4), '(', round(LB_Perros, 4), '-', round(UB_Perros, 4), ')'),
+         pGato = `Adultos con gato`/`Total de adultos encuestados`,
+         LB_Gatos = CIs(pGato, `Total de adultos encuestados`)[,'LB'],
+         UB_Gatos = CIs(pGato, `Total de adultos encuestados`)[,'UB'],
+         `Proportion of adults with cats` = paste0(round(pGato, 4), '(', round(LB_Gatos, 4), '-', round(UB_Gatos, 4), ')'),
+         EPerros = POB*pPerro,
+         EGatos = POB*pGato) %>% 
+  select(State = Entidad, `Proportion of adults with dogs`, `Proportion of adults with cats`, `Estimated dogs` = EPerros, `Estimated cats` = EGatos)
+
+EPop %>% 
+  write.csv(.,file = "../Documentation/Tablas/Estimaciones.csv", row.names = F)
+```
+
+```{r}
+# 70838892 <- esta es la estimacion con Exponential-change model
+# Estimacion con Constant-share
+# Perros
+sum(EPop$`Estimated dogs`)
+# Gatos
+sum(EPop$`Estimated cats`)
+```
+
+
+```{r fig.height=2.5, fig.width=7}
+# Put on a map
+# Load shapefile of Mexico and map the number of animals on 2014
+library(sf)
+MxSp <- raster::getData("GADM", country = "MEX", level = 1) %>%
+  st_as_sf() %>%
+  select(NAME_1) %>%
+  rmapshaper::ms_simplify(., keep = 0.001)
+
+ord <- c(1:4, 6:9, 5, 10, 13, 12, 14, 15, 11, 16:23, 25, 24, 26:32)
+
+MxSp <- MxSp %>%
+  cbind(EPop[ord,])
+
+PerrosP <- MxSp %>%
+  ggplot() +
+  geom_sf(aes(fill = Estimated.dogs)) +
+  scale_fill_gradient(low = 'grey', high = 'yellow3') +
+  theme_minimal() +
+  theme(axis.text = element_blank()) +
+  ggtitle("Poblacion estimada de perros")
+
+GatosP <- MxSp %>%
+  ggplot() +
+  geom_sf(aes(fill = Estimated.cats))+
+  scale_fill_gradient(low = 'grey', high = 'blue3') +
+  theme_minimal() +
+  theme(axis.text = element_blank()) +
+  ggtitle("Poblacion estimada de gatos")
+
+ggpubr::ggarrange(PerrosP, GatosP)
+```
+
+```{r include = F}
+knitr::opts_chunk$set(eval = F, include = F)
+```
+
+
+
+<!-- # Veterinarias en Mexico -->
+
+```{r}
+VetMex <- readxl::read_xlsx("Datos/VetsMex.xlsx", col_names = F)
+VetMex <- data.frame(Est = VetMex$...1[seq(1, 64, by = 2)], N = VetMex$...1[seq(2, 64, 2)]) %>%
+  mutate(N = gsub('[(a-z)]', '', N), 
+         N = gsub(',', '', N))
+```
+
+
+<!-- # SLR -->
+
+```{r}
+# Numero de perros~gatos
+Encuesta14 %>%
+  ggplot() +
+  geom_point(aes(x = `Adultos con gato`, y = `Adultos con perro`))
+
+# Numero de perros~adultos
+Encuesta14 %>%
+  ggplot() +
+  geom_point(aes(x = `Total de adultos encuestados`, y = `Adultos con perro`))
+
+# Numero de gato~adultos
+Encuesta14 %>%
+  ggplot() +
+  geom_point(aes(x = `Total de adultos encuestados`, y = `Adultos con gato`))
+```
+
+```{r}
+# 7,000,000
+PobCan <- data.frame(year = c(1990, 1999, 2014), est = c(7e6, 13e6, 39717173))
+
+PobCan %>%
+  ggplot() +
+  geom_point(aes(year, est))
+```
+
+

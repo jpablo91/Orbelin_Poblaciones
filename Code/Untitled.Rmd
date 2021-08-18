@@ -1,0 +1,95 @@
+---
+title: "BIARE"
+author: "Pablo Gomez"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = F, message = F)
+library(dplyr); library(ggplot2); library(ggpubr);library(Pabloverse)
+```
+
+
+```{r Datos CONAPO}
+# Extraer el anio 2022 de CONAPO
+CP <- rbind(read.csv("../Datos/CONAPO Proyecciones/base_municipios_final_datos_01.csv"),
+            read.csv("../Datos/CONAPO Proyecciones/base_municipios_final_datos_02.csv"))
+
+# Rango de edades a remover (No adultos)
+rangoEdad <- c("pobm_00_04", "pobm_05_09", "pobm_10_14", "pobm_15_19")
+
+# Formato de los datos
+CPsub <- CP %>%
+  mutate(NOM_ENT = stringi::stri_trans_general(NOM_ENT, "Latin-ASCII") %>% 
+           ifelse(stringr::str_detect(string = ., pattern = "Oaxaca"), "OAXACA", .)) %>%
+  filter(!(EDAD_QUIN %in% rangoEdad)) %>% # Remover los no adultos
+  group_by(NOM_ENT, A.O) %>% 
+  summarise(POB = sum(POB)) %>% 
+  filter(A.O %in% 2016:2020) %>% 
+  data.frame()
+
+# Make the order match wit the rabies names
+ord <- c(1:4, 7, 8, 9, 5, 6, 10:32)
+
+CPk <- CPsub %>% 
+  distinct(NOM_ENT) %>% 
+  mutate(Entidad = Ent[ord,])
+
+rabia <- rabia %>% 
+  left_join(CPk) %>% 
+  left_join(CPsub, by = c('NOM_ENT', 'year' = 'A.O'))
+
+rabia <- rabia %>% 
+  rename(Agresiones = X053.ZOONOSIS.RABIA.PERSONAS.AGREDIDAS)
+```
+
+## BIARE datos
+
+```{r Datos BIARE}
+Encuesta14 <- readxl::read_xlsx("../Datos/Datos pC INEGI.xlsx", range = "B4:H36")
+# Set the same order as spatial Object
+ord <- c(1:4, 7, 6, 8, 9, 5, 10, 13, 12, 14, 15, 11, 16:23, 25, 24, 26:32)
+
+EncuestaSp <- MxSp %>% 
+  # data.frame() %>% 
+  # select(NAME_1) %>% 
+  mutate(ENT = Encuesta14$ENTIDAD[ord], Encuestados = Encuesta14$`Total de adultos encuestados`[ord],
+         Perros = Encuesta14$`Adultos con perro`[ord],
+         Gatos = Encuesta14$`Adultos con gato`[ord])
+
+E14p <- EncuestaSp %>% 
+  mutate(Perrosc = categorize(round(Perros/10e3), n = 6)) %>% 
+  ggplot() +
+  geom_sf(aes(fill = Perrosc), lwd = 0.1, col = 'black') +
+  theme_light() +
+  # scale_fill_gradient(low = 'black', high = 'red') +
+  scale_fill_manual(values = grDevices::colorRampPalette(colors = c('white', 'black'))(6)) +
+  theme(axis.ticks = element_blank(), axis.text = element_blank(),
+        legend.position = 'top', legend.text = element_text(size = 10), legend.key.size = unit(0.1, 'in')) +
+  guides(fill = guide_legend(title.position = 'top')) +
+  labs(fill = "Dogs x 10,000")
+
+E14g <- EncuestaSp %>% 
+  mutate(Gatosc = categorize(round(Gatos/10e3), n = 6)) %>% 
+  ggplot() +
+  geom_sf(aes(fill = Gatosc), lwd = 0.1, col = 'black') +
+  # scale_fill_gradient(low = 'black', high = 'purple') +
+  scale_fill_manual(values = grDevices::colorRampPalette(colors = c('white', 'black'))(6)) +
+  theme_light() +
+  theme(axis.ticks = element_blank(), 
+        axis.text = element_blank(),
+        legend.position = 'top', legend.text = element_text(size = 10), legend.key.size = unit(0.1, 'in')) +
+  guides(fill = guide_legend(title.position = 'top')) +
+  labs(fill = "Cats X 10,000")
+
+
+ggarrange(E14p, E14g) %>% 
+  annotate_figure(top = text_grob('Population according to 2014 survey', face = "bold", size = 15)) 
+# %>% 
+#   ggsave(filename = '../Documentation/Figures/PopDistributionE14.png', height = 3, width = 7)
+```

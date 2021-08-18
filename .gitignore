@@ -1,0 +1,9 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+
+# Data
+Datos/Mex/
+Datos/Shared/
+Datos/destdv250k_2gw/
